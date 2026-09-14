@@ -1,3 +1,15 @@
+/**
+ * Stage 02 — Candidate Resolution
+ *
+ * This stage determines which Python files from the repository should be
+ * analysed further. In GitHub mode the LLM reads the full repo tree and
+ * nominates the files most likely to be involved in the reported bug.
+ * In static mode the uploaded files are used directly — no nomination step.
+ *
+ * The stage renders a two-column layout:
+ *   Left  (5/12) — the resolved file tree (read-only, for context).
+ *   Right (7/12) — the candidate set with per-file metadata and controls.
+ */
 import React, { useState } from "react";
 import { useProject } from "../../context/ProjectContext";
 import Badge from "../common/Badge";
@@ -7,6 +19,7 @@ import StageStatus from "../common/StageStatus";
 import { basename, formatBytes } from "../../lib/pipeline";
 
 export default function Stage2Candidates() {
+  // ── Pipeline context ──────────────────────────────────────────────
   const {
     sourceType,
     treePreview,
@@ -22,14 +35,18 @@ export default function Stage2Candidates() {
     runFileReasoning,
   } = useProject();
 
-  const [topN, setTopN] = useState(engine?.default_top_n_candidates ?? 5);
-  const [showRaw, setShowRaw] = useState(false);
+  // ── Local UI state ────────────────────────────────────────────────
+  const [topN, setTopN] = useState(engine?.default_top_n_candidates ?? 5); // max files to nominate
+  const [showRaw, setShowRaw] = useState(false);                           // toggle raw LLM output
 
+  // ── Derived values ────────────────────────────────────────────────
   const busy = loadingStage !== null;
   const isStatic = sourceType === "static";
   const hasCandidates = candidateFiles.length > 0;
+  // Index candidate metadata by path for fast lookup in the list render.
   const metaByPath = new Map(candidateMeta.map((entry) => [entry.path, entry]));
 
+  // ── Render ────────────────────────────────────────────────────────
   return (
     <div>
       <SectionHeading
@@ -49,8 +66,10 @@ export default function Stage2Candidates() {
         }
       />
 
+      {/* Two-column layout: resolved tree (5 cols) + candidate set (7 cols) */}
       <div className="grid grid-cols-1 gap-16 lg:grid-cols-12">
-        {/* Left — the resolved tree. */}
+
+        {/* ── Left column: resolved file tree ───────────────────── */}
         <div className="lg:col-span-5">
           <div className="mb-4 flex items-baseline justify-between border-b border-hairline pb-3">
             <span className="label-meta">Resolved structure</span>
@@ -58,6 +77,7 @@ export default function Stage2Candidates() {
               {numPythonFiles} .py file{numPythonFiles === 1 ? "" : "s"}
             </span>
           </div>
+          {/* Read-only tree preview — shows the filtered repo structure. */}
           <pre className="max-h-[32rem] overflow-auto bg-surface p-4 font-mono text-xs leading-relaxed text-secondary">
             {treePreview || "—"}
           </pre>
@@ -67,7 +87,7 @@ export default function Stage2Candidates() {
           </p>
         </div>
 
-        {/* Right — the candidate set. */}
+        {/* ── Right column: candidate set ───────────────────────── */}
         <div className="lg:col-span-7">
           <div className="mb-4 flex items-baseline justify-between border-b border-hairline pb-3">
             <span className="label-meta">Candidate set</span>
@@ -78,6 +98,7 @@ export default function Stage2Candidates() {
             )}
           </div>
 
+          {/* ── Empty state: prompt to nominate ──────────────────── */}
           {!hasCandidates && !busy && (
             <div className="space-y-8 py-6">
               <p className="max-w-prose text-base leading-relaxed text-secondary">
@@ -103,6 +124,7 @@ export default function Stage2Candidates() {
             </div>
           )}
 
+          {/* ── Populated candidate list ─────────────────────────── */}
           {hasCandidates && (
             <ol className="animate-rise">
               {candidateFiles.map((path, index) => {
@@ -112,15 +134,19 @@ export default function Stage2Candidates() {
                     key={path}
                     className="flex items-baseline gap-6 border-b border-hairline/70 py-4"
                   >
+                    {/* Zero-padded rank index */}
                     <span className="w-8 shrink-0 font-mono text-xs tabular-nums text-muted">
                       {String(index + 1).padStart(2, "0")}
                     </span>
                     <div className="min-w-0 flex-1">
+                      {/* Filename (basename only) */}
                       <div className="truncate font-mono text-sm font-medium text-primary">
                         {basename(path)}
                       </div>
+                      {/* Full relative path */}
                       <div className="truncate font-mono text-xs text-muted">{path}</div>
                     </div>
+                    {/* Line count and file size from candidate metadata */}
                     <span className="shrink-0 font-mono text-xs text-muted">
                       {meta?.line_count != null ? `${meta.line_count} lines` : "—"}
                       {meta?.size_bytes != null && ` · ${formatBytes(meta.size_bytes)}`}
@@ -131,6 +157,7 @@ export default function Stage2Candidates() {
             </ol>
           )}
 
+          {/* ── Raw model output (collapsible) ───────────────────── */}
           {hasCandidates && candidatesRawOutput && (
             <div className="mt-6">
               <button
@@ -148,13 +175,16 @@ export default function Stage2Candidates() {
             </div>
           )}
 
+          {/* ── Loading indicator ────────────────────────────────── */}
           <StageStatus active={busy} label={loadingLabel} />
 
+          {/* ── Action row ───────────────────────────────────────── */}
           {hasCandidates && (
             <div className="mt-8 flex flex-wrap items-center gap-6 border-t border-hairline pt-8">
               <Button onClick={runFileReasoning} disabled={busy}>
                 Generate Isolated File Reasoning →
               </Button>
+              {/* Re-run is only available in GitHub mode (static uploads are fixed). */}
               {!isStatic && (
                 <button
                   type="button"
