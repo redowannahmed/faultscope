@@ -1,3 +1,17 @@
+/**
+ * Stage 05 — Element Extraction & Causal Reasoning
+ *
+ * The most granular (and longest) stage. For each promoted file the
+ * extraction step pulls out every function, class, and module-level
+ * assignment. Each element then gets its own model call: the LLM reads
+ * the isolated reasoning paragraph and writes a causal analysis of how
+ * that element relates to the reported bug.
+ *
+ * Layout:
+ *   Tabs along the top select the active file.
+ *   Left column (4/12) — scrollable element index for the active file.
+ *   Right column (8/12) — full reasoning prose for the selected element.
+ */
 import React, { useEffect, useMemo, useState } from "react";
 import { useProject } from "../../context/ProjectContext";
 import Badge from "../common/Badge";
@@ -12,9 +26,11 @@ import {
   pathForFileKey,
 } from "../../lib/pipeline";
 
+// Display order for element kinds: classes first, then functions, then globals.
 const KIND_ORDER = { class: 0, function: 1, global: 2 };
 
 export default function Stage5ElemReason() {
+  // ── Pipeline context ──────────────────────────────────────────────
   const {
     elementReasoning,
     fileRanking,
@@ -26,6 +42,8 @@ export default function Stage5ElemReason() {
     runElementRanking,
   } = useProject();
 
+  // ── Derived: sorted file keys ─────────────────────────────────────
+  // elementReasoning is keyed by "file0", "file1", etc. — sort by index.
   const fileKeys = useMemo(
     () =>
       Object.keys(elementReasoning || {}).sort(
@@ -34,15 +52,19 @@ export default function Stage5ElemReason() {
     [elementReasoning],
   );
 
+  // ── Local UI state ────────────────────────────────────────────────
   const [activeFileKey, setActiveFileKey] = useState(null);
   const [activeIdentifier, setActiveIdentifier] = useState(null);
 
+  // ── Derived: active file / elements ───────────────────────────────
+  // Fall back to the first file key if the active one is invalid.
   const currentKey = activeFileKey && fileKeys.includes(activeFileKey) ? activeFileKey : fileKeys[0];
   const elements = useMemo(
     () => Object.keys(elementReasoning?.[currentKey] || {}),
     [elementReasoning, currentKey],
   );
 
+  // Sort elements by kind (class → function → global), then alphabetically.
   const sortedElements = useMemo(
     () =>
       [...elements].sort((a, b) => {
@@ -54,17 +76,20 @@ export default function Stage5ElemReason() {
     [elements],
   );
 
-  // Selecting the first element of a newly-activated file keeps the reading
-  // panel populated instead of dropping to an empty state on every tab change.
+  // Auto-select the first element when switching files to keep the reading
+  // panel populated instead of dropping to an empty state.
   useEffect(() => {
     if (sortedElements.length && !sortedElements.includes(activeIdentifier)) {
       setActiveIdentifier(sortedElements[0]);
     }
   }, [sortedElements, activeIdentifier]);
 
+  // ── Derived: current reasoning + ground truth set ─────────────────
   const busy = loadingStage !== null;
   const hasReasoning = fileKeys.length > 0;
   const reasoning = elementReasoning?.[currentKey]?.[activeIdentifier] || "";
+  // Parse the comma/newline-separated ground truth elements into a Set
+  // for O(1) lookup when highlighting matches in the element list.
   const groundTruthSet = useMemo(
     () =>
       new Set(
@@ -76,6 +101,7 @@ export default function Stage5ElemReason() {
     [groundTruthElements],
   );
 
+  // ── Render ────────────────────────────────────────────────────────
   return (
     <div>
       <SectionHeading
@@ -84,8 +110,10 @@ export default function Stage5ElemReason() {
         description="Every function, class, and module-level assignment in the promoted files, each explained on its own terms."
       />
 
+      {/* ── Loading indicator ────────────────────────────────────── */}
       <StageStatus active={busy} label={loadingLabel} />
 
+      {/* ── Empty state: prompt to extract elements ──────────────── */}
       {!hasReasoning && !busy && (
         <div className="space-y-8 py-6">
           <p className="max-w-prose text-base leading-relaxed text-secondary">
@@ -101,9 +129,11 @@ export default function Stage5ElemReason() {
         </div>
       )}
 
+      {/* ── Populated: tabbed file browser + element detail ──────── */}
       {hasReasoning && (
         <div className="animate-rise">
-          {/* File tabs */}
+
+          {/* ── File tabs ─────────────────────────────────────────── */}
           <div className="mb-10 flex flex-wrap items-center gap-8 border-b border-hairline pb-3">
             {fileKeys.map((key) => {
               const path = pathForFileKey(key, fileRanking);
@@ -115,7 +145,7 @@ export default function Stage5ElemReason() {
                   type="button"
                   onClick={() => {
                     setActiveFileKey(key);
-                    setActiveIdentifier(null);
+                    setActiveIdentifier(null); // reset so the effect auto-selects
                   }}
                   className={`relative flex items-baseline gap-2 pb-3 transition-colors ${
                     active ? "text-accent" : "text-muted hover:text-secondary"
@@ -133,7 +163,8 @@ export default function Stage5ElemReason() {
           </div>
 
           <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">
-            {/* Left — element index */}
+
+            {/* ── Left column: element index (4/12) ──────────────── */}
             <div className="lg:col-span-4">
               <div className="mb-4 flex items-baseline justify-between border-b border-hairline pb-3">
                 <span className="label-meta">Elements</span>
@@ -153,6 +184,7 @@ export default function Stage5ElemReason() {
                           active ? "bg-accent-tint" : "hover:bg-subtle/60"
                         }`}
                       >
+                        {/* Kind label: class / function / global */}
                         <span
                           className={`w-16 shrink-0 font-mono text-[10px] uppercase tracking-wider ${
                             active ? "text-accent" : "text-muted"
@@ -160,6 +192,7 @@ export default function Stage5ElemReason() {
                         >
                           {kind}
                         </span>
+                        {/* Element name */}
                         <span
                           className={`min-w-0 flex-1 truncate font-mono text-sm ${
                             active ? "font-medium text-accent" : "text-primary"
@@ -179,10 +212,11 @@ export default function Stage5ElemReason() {
               </ul>
             </div>
 
-            {/* Right — the reading room */}
+            {/* ── Right column: reading room (8/12) ──────────────── */}
             <div className="min-w-0 lg:col-span-8">
               {activeIdentifier ? (
                 <>
+                  {/* Element header with file path */}
                   <div className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-hairline pb-3">
                     <div className="flex items-center gap-3">
                       <span className="font-mono text-sm font-medium text-primary">
@@ -211,6 +245,7 @@ export default function Stage5ElemReason() {
             </div>
           </div>
 
+          {/* ── Proceed to element ranking ────────────────────────── */}
           <div className="mt-12 flex items-center gap-6 border-t border-hairline pt-8">
             <Button onClick={runElementRanking} disabled={busy}>
               Rank Elements by Causal Relevance →
