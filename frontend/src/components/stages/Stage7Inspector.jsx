@@ -1,3 +1,18 @@
+/**
+ * Stage 07 — Localized Code & Causal Diagnostic
+ *
+ * The final stage of the pipeline. Shows the nominated element's source
+ * code alongside the reasoning that led to its selection. Users can
+ * compare the reasoning-guided pick against a surface-similarity proxy
+ * (element whose name most resembles the bug report) to see whether
+ * reasoning overturned or confirmed the obvious candidate.
+ *
+ * Layout:
+ *   Left column  (7/12) — CodeViewer with line numbers.
+ *   Right column (5/12) — reasoning prose + comparison panel.
+ *
+ * A full diagnostics export (JSON) is available at the bottom.
+ */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useProject } from "../../context/ProjectContext";
 import * as api from "../../api/client";
@@ -24,6 +39,17 @@ import {
  * illustration of the two selection criteria, not a second pipeline run, and
  * the copy says so.
  */
+/**
+ * ComparisonPanel — side-by-side surface-similarity vs. causal pick.
+ *
+ * Renders two columns with left-border accent:
+ *   Left  — the element whose *name* most resembles the bug report
+ *           (computed via `surfaceSimilarityPick`, a lexical proxy).
+ *   Right — the element FaultScope actually ranked first.
+ *
+ * The copy below the columns explains whether the two criteria agree or
+ * disagree. This is an illustration, not a second pipeline run.
+ */
 function ComparisonPanel({ identifiers, problemStatement, causalPick, elementReasoning }) {
   const surfacePick = useMemo(
     () => surfaceSimilarityPick(identifiers, problemStatement),
@@ -34,6 +60,7 @@ function ComparisonPanel({ identifiers, problemStatement, causalPick, elementRea
 
   const agree = surfacePick === causalPick;
 
+  /** Single comparison column with left-border accent. */
   const Column = ({ label, note, identifier, accent }) => (
     <div className={`space-y-3 ${accent ? "border-l-2 border-accent pl-5" : "border-l-2 border-hairline pl-5"}`}>
       <div
@@ -79,6 +106,7 @@ function ComparisonPanel({ identifiers, problemStatement, causalPick, elementRea
 }
 
 export default function Stage7Inspector() {
+  // ── Pipeline context ──────────────────────────────────────────────
   const state = useProject();
   const {
     activeElement,
@@ -89,14 +117,18 @@ export default function Stage7Inspector() {
     goToStage,
   } = state;
 
-  const [source, setSource] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  // ── Local UI state ────────────────────────────────────────────────
+  const [source, setSource] = useState(null);    // fetched source code
+  const [loading, setLoading] = useState(false); // fetch in progress
+  const [error, setError] = useState(null);      // fetch error message
 
+  // ── Derived: active element metadata ──────────────────────────────
   const identifier = activeElement?.identifier;
   const filePath = activeElement?.file;
   const fileKey = activeElement?.fileKey;
 
+  // ── Fetch element source from the backend ─────────────────────────
+  // Resets on every new element selection; cleans up on unmount.
   useEffect(() => {
     if (!projectId || !filePath || !identifier) return undefined;
 
@@ -122,11 +154,14 @@ export default function Stage7Inspector() {
     };
   }, [projectId, filePath, identifier]);
 
+  // ── Derived: reasoning + ranking position ─────────────────────────
   const reasoning = fileKey ? elementReasoning?.[fileKey]?.[identifier] || "" : "";
   const rankingKey = fileKey ? rankingKeyForReasoningKey(fileKey) : null;
   const rankedIdentifiers = rankingKey ? elementRanking?.[rankingKey] || [] : [];
   const rankPosition = rankedIdentifiers.indexOf(identifier) + 1;
 
+  // ── Diagnostics export ────────────────────────────────────────────
+  // Bundles every pipeline stage's output into a single JSON file.
   const handleExport = useCallback(() => {
     const diagnostics = {
       exported_at: new Date().toISOString(),
@@ -173,6 +208,7 @@ export default function Stage7Inspector() {
     URL.revokeObjectURL(url);
   }, [state, projectId, activeElement, source, reasoning, rankPosition]);
 
+  // ── Empty state: no element selected ──────────────────────────────
   if (!activeElement) {
     return (
       <div>
@@ -192,9 +228,11 @@ export default function Stage7Inspector() {
     );
   }
 
+  // ── Derived: element display info ─────────────────────────────────
   const { kind, name } = parseElementKey(identifier);
   const lineRange = source ? `lines ${source.start_line}–${source.end_line}` : "";
 
+  // ── Render: code + rationale side by side ─────────────────────────
   return (
     <div>
       <SectionHeading
@@ -210,8 +248,9 @@ export default function Stage7Inspector() {
       />
 
       <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">
-        {/* Left — the code */}
+        {/* ── Left column: source code (7/12) ────────────────────── */}
         <div className="min-w-0 lg:col-span-7">
+          {/* File path + line range header */}
           <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3 border-b border-hairline pb-3">
             <span className="break-all font-mono text-xs text-secondary">
               {filePath}
@@ -220,18 +259,21 @@ export default function Stage7Inspector() {
             <span className="font-mono text-[11px] text-muted">{name}</span>
           </div>
 
+          {/* Loading: sweep animation across the full width */}
           {loading && (
             <div className="relative h-px w-full overflow-hidden bg-hairline">
               <div className="absolute inset-y-0 w-1/4 animate-sweep bg-accent" />
             </div>
           )}
 
+          {/* Error: red left-border banner */}
           {error && (
             <p className="border-l-2 border-status-error py-3 pl-4 text-sm leading-relaxed text-status-error">
               {error}
             </p>
           )}
 
+          {/* Code viewer + duplicate-identifier warning */}
           {source && (
             <>
               <CodeViewer
@@ -251,13 +293,14 @@ export default function Stage7Inspector() {
           )}
         </div>
 
-        {/* Right — the rationale */}
+        {/* ── Right column: rationale (5/12) ─────────────────────── */}
         <div className="min-w-0 lg:col-span-5">
           <h3 className="label-meta mb-5">Why this element is responsible</h3>
           <ReasoningProse text={reasoning} />
         </div>
       </div>
 
+      {/* ── Comparison panel: surface similarity vs. causal pick ── */}
       <ComparisonPanel
         identifiers={rankedIdentifiers.length ? rankedIdentifiers : [identifier]}
         problemStatement={problemStatement}
@@ -265,6 +308,7 @@ export default function Stage7Inspector() {
         elementReasoning={reasoning}
       />
 
+      {/* ── Action row: export + back link ───────────────────────── */}
       <div className="mt-12 flex flex-wrap items-center gap-6 border-t border-hairline pt-8">
         <Button variant="secondary" onClick={handleExport}>
           Export Diagnostics as JSON

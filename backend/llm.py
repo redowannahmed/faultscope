@@ -128,6 +128,7 @@ def _call_once(
     temperature: float,
 ) -> str:
     """One attempt against one provider. Wrapped by call_llm's retry loop."""
+    # Anthropic Claude: uses the messages API with a single user message.
     if backend == "anthropic":
         import anthropic  # type: ignore[import]
 
@@ -139,6 +140,7 @@ def _call_once(
         )
         return response.content[0].text
 
+    # OpenAI GPT: uses chat completions API with a single user message.
     elif backend == "openai":
         import openai  # type: ignore[import]
 
@@ -151,9 +153,11 @@ def _call_once(
         )
         return response.choices[0].message.content
 
+    # Google Gemini: supports both API key and Vertex AI authentication.
     elif backend == "gemini":
         from google import genai  # type: ignore[import]
 
+        # Try API key first, fall back to Vertex AI if not set.
         google_api_key = os.environ.get("GOOGLE_API_KEY")
         if google_api_key:
             client = genai.Client(api_key=google_api_key)

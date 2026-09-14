@@ -59,6 +59,7 @@ def extract_file_list(llm_output: str) -> list[str]:
         caller must cross-reference against the real candidate set).
     """
     stripped = llm_output.strip()
+    # First, try to eval as a Python list literal — the original code does this.
     if stripped.startswith("[") and stripped.endswith("]"):
         try:
             result = eval(stripped)  # noqa: S307 — intentional, matches original
@@ -67,6 +68,7 @@ def extract_file_list(llm_output: str) -> list[str]:
             # eval succeeded but not a list — fall through to regex
         except Exception:
             pass
+    # Fallback: extract all tokens matching Python file path patterns.
     return re.findall(r"[\w\-/]+\.py", llm_output)
 
 
@@ -98,10 +100,12 @@ def hit_at_k(
     if not ground_truth_file:
         return None
 
+    # Find the 1-indexed position of the ground truth in the ranked list.
     rank_position: int | None = None
     if ground_truth_file in ranked_list:
         rank_position = ranked_list.index(ground_truth_file) + 1
 
+    # Check if the ground truth appears in the top-k positions.
     return {
         "rank_position": rank_position,
         "hit_at_k": {
@@ -144,7 +148,7 @@ def rank_files(
     Raises:
         RuntimeError on LLM call failure (caller handles).
     """
-    # Serialize reasoning dict as JSON (verbatim from original)
+    # Serialize reasoning dict as JSON (verbatim from original) for the prompt.
     file_reasoning_json = json.dumps(file_reasoning_dict, indent=2)
 
     prompt = _FILE_RANKING_PROMPT_TEMPLATE.format(
@@ -155,10 +159,12 @@ def rank_files(
     logger.info("Stage 3: calling LLM (%s/%s) for file ranking", backend, model)
     raw_output = call_llm(prompt, model=model, backend=backend, temperature=0.0)
 
+    # Parse the LLM's proposed ranking — may contain invented paths.
     proposed = extract_file_list(raw_output)
     logger.debug("Stage 3: LLM proposed order: %s", proposed)
 
     # Cross-reference: keep only real candidates, preserve LLM's relative order.
+    # The LLM may invent paths or omit some candidates.
     candidate_set = set(candidates)
     seen: set[str] = set()
     ranked: list[str] = []
@@ -168,6 +174,7 @@ def rank_files(
             seen.add(path)
 
     # Append any candidates the LLM forgot to mention (preserve completeness).
+    # The pipeline expects a ranking of ALL candidates, not just a subset.
     for path in candidates:
         if path not in seen:
             ranked.append(path)

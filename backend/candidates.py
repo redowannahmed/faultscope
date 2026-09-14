@@ -62,6 +62,7 @@ def build_candidate_prompt(
     Returns:
         The fully-formatted prompt string ready to send to the LLM.
     """
+    # Convert the nested structure dict into indented tree text for the prompt.
     tree_text = show_project_structure(structure).strip()
     return _CANDIDATE_PROMPT_TEMPLATE.format(
         problem_statement=problem_statement,
@@ -86,7 +87,9 @@ def parse_candidate_files(raw_llm_output: str, files: list) -> list[str]:
     Returns:
         Ordered list of validated real file paths.
     """
+    # Split the response into lines — each line should be one file path.
     lines = raw_llm_output.strip().split("\n") if raw_llm_output else []
+    # correct_file_paths filters to only real file paths in the repo.
     return correct_file_paths(lines, files)
 
 
@@ -124,8 +127,9 @@ def select_candidates(
         model,
         top_n_candidates,
     )
-    # temperature=0 per spec (§4)
+    # temperature=0 per spec (§4) — deterministic output for reproducibility.
     raw_output = call_llm(prompt, model=model, backend=backend, temperature=0.0)
+    # Parse and validate the LLM's proposed paths against the real file list.
     candidates = parse_candidate_files(raw_output, files_flat)
     logger.info("Stage 1: LLM proposed %d valid candidates", len(candidates))
     return candidates, raw_output

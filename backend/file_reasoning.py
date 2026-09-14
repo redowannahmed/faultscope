@@ -58,10 +58,13 @@ def _reason_single_file(
         with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
             file_content = fh.read()
     except Exception as exc:
+        # Store the error as the reasoning value — Stage 3 expects a dict
+        # entry for every candidate, so we can't just skip failures.
         error_msg = f"Error during reasoning: {exc}"
         logger.warning("Could not read file %s: %s", abs_path, exc)
         return candidate_path, error_msg
 
+    # Truncate excessively long files to stay within LLM context budgets.
     if len(file_content) > max_chars:
         file_content = file_content[:max_chars] + "\n... [truncated] ..."
 
@@ -73,6 +76,7 @@ def _reason_single_file(
     try:
         reasoning = call_llm(prompt, model=model, backend=backend, temperature=0.0)
     except Exception as exc:
+        # Store the error as the reasoning value (same as file-read failures).
         error_msg = f"Error during reasoning: {exc}"
         logger.warning(
             "LLM call failed for file %s: %s", candidate_path, exc
@@ -117,6 +121,7 @@ def generate_file_reasoning(
     )
     results: dict[str, str] = {}
 
+    # Submit all files to the thread pool; as_completed yields futures as they finish.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_path = {
             executor.submit(
@@ -136,5 +141,6 @@ def generate_file_reasoning(
             logger.debug("Stage 2: finished reasoning for %s", path)
 
     # Preserve the original candidate order in the returned dict.
+    # ThreadPoolExecutor returns results in completion order, not submission order.
     ordered: dict[str, str] = {path: results[path] for path in candidates if path in results}
     return ordered

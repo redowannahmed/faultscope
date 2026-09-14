@@ -1,3 +1,15 @@
+/**
+ * Stage 01 — Manifest & Code Ingestion
+ *
+ * The entry point of the FaultScope pipeline. This stage collects:
+ *   1. A bug report (free-text problem statement).
+ *   2. Source code — either from a public GitHub repository or a direct file
+ *      upload of Python files.
+ *   3. Optional ground-truth metadata used only for evaluation scoring.
+ *
+ * Once submitted the pipeline resolves the candidate set and kicks off the
+ * reasoning stages downstream.
+ */
 import React, { useRef, useState } from "react";
 import { useProject } from "../../context/ProjectContext";
 import Badge from "../common/Badge";
@@ -35,6 +47,13 @@ async function readEntry(entry, prefix = "") {
   return [];
 }
 
+/**
+ * Extract Python files from a drag-and-drop DataTransfer.
+ *
+ * The WebKit entries API preserves directory structure so we can reconstruct
+ * full relative paths. Browsers that don't support it fall back to a flat
+ * file list — directory nesting is lost but the upload still works.
+ */
 async function filesFromDrop(dataTransfer) {
   const items = Array.from(dataTransfer.items || []);
   const entries = items
@@ -52,6 +71,13 @@ async function filesFromDrop(dataTransfer) {
     .map((file) => ({ file, path: file.webkitRelativePath || file.name }));
 }
 
+/**
+ * ModeToggle — Switches between GitHub ingestion and direct file upload.
+ *
+ * Rendered as tab-like buttons with a single accent underline on the active
+ * choice. Only one mode can be active; selecting the other swaps the form
+ * fields rendered below.
+ */
 function ModeToggle({ value, onChange, disabled }) {
   const modes = [
     { id: "github", label: "Public GitHub Repository" },
@@ -79,6 +105,13 @@ function ModeToggle({ value, onChange, disabled }) {
   );
 }
 
+/**
+ * Field — A labelled form field wrapper.
+ *
+ * Renders the `.label-meta` label on top, an optional "required"/"optional"
+ * hint aligned to the right, and the input/textarea element passed as
+ * children. Keeps field layout consistent across the form.
+ */
 function Field({ label, hint, children }) {
   return (
     <div className="space-y-2">
@@ -91,7 +124,20 @@ function Field({ label, hint, children }) {
   );
 }
 
+/**
+ * Stage1Manifest — The pipeline's entry form.
+ *
+ * Layout:
+ *   Left column (4/12) — explanatory prose + engine badge.
+ *   Right column (8/12) — the actual form:
+ *     1. Mode toggle (GitHub vs. Upload)
+ *     2. Mode-specific fields (repo URL / file drop zone)
+ *     3. Bug report textarea
+ *     4. Optional ground-truth section (collapsible)
+ *     5. Submit button + validation hints
+ */
 export default function Stage1Manifest() {
+  // ── Pipeline context ──────────────────────────────────────────────
   const {
     sourceType,
     setField,
@@ -108,20 +154,28 @@ export default function Stage1Manifest() {
     initializeFromUpload,
   } = useProject();
 
-  const [files, setFiles] = useState([]);
-  const [dragging, setDragging] = useState(false);
-  const [showGroundTruth, setShowGroundTruth] = useState(false);
-  const [localNotice, setLocalNotice] = useState("");
-  // Held locally rather than in the pipeline state: a credential should not be
-  // carried around in the session object or land in an exported diagnostics file.
+  // ── Local UI state ────────────────────────────────────────────────
+  const [files, setFiles] = useState([]);                  // uploaded .py files (static mode)
+  const [dragging, setDragging] = useState(false);         // drop-zone drag-over indicator
+  const [showGroundTruth, setShowGroundTruth] = useState(false); // collapsible section toggle
+  const [localNotice, setLocalNotice] = useState("");      // per-field warnings (e.g. rejected files)
+  // GitHub token is held locally — it should never enter pipeline state or
+  // appear in an exported diagnostics file.
   const [githubToken, setGithubToken] = useState("");
-  const fileInputRef = useRef(null);
+  const fileInputRef = useRef(null);                        // ref for the hidden <input type="file">
 
+  // ── Derived values ────────────────────────────────────────────────
   const busy = loadingStage !== null;
   const engineLabel = engine
     ? `${engine.default_model} · ${engine.default_backend}`
     : "—";
 
+  // ── File management ───────────────────────────────────────────────
+  /**
+   * Merge incoming files into the manifest.
+   * Non-Python files are silently dropped with a count shown to the user.
+   * Duplicates (same path) are replaced — the most recent upload wins.
+   */
   const addFiles = (incoming) => {
     setLocalNotice("");
     const pythonOnly = incoming.filter(({ file }) => file.name.endsWith(".py"));
@@ -136,6 +190,7 @@ export default function Stage1Manifest() {
     });
   };
 
+  /** Handle a file/folder drop onto the drop zone. */
   const handleDrop = async (event) => {
     event.preventDefault();
     setDragging(false);
@@ -143,24 +198,28 @@ export default function Stage1Manifest() {
     addFiles(await filesFromDrop(event.dataTransfer));
   };
 
+  /** Handle the hidden file-input's change event (click-to-browse). */
   const handleBrowse = (event) => {
     const picked = Array.from(event.target.files || []).map((file) => ({
       file,
       path: file.webkitRelativePath || file.name,
     }));
     addFiles(picked);
-    event.target.value = "";
+    event.target.value = ""; // reset so the same file can be re-selected
   };
 
+  // ── Submission guard ──────────────────────────────────────────────
   const canSubmit =
     problemStatement.trim().length > 0 &&
     !busy &&
     (sourceType === "github" ? repoUrl.trim().length > 0 : files.length > 0);
 
+  /** Validate and dispatch to the appropriate ingestion path. */
   const handleSubmit = (event) => {
     event.preventDefault();
     if (!canSubmit) return;
 
+    // Shared fields that both ingestion paths require.
     const shared = { problemStatement, groundTruthFile, groundTruthElements };
     if (sourceType === "github") {
       initializeFromGithub({ repoUrl, ref, subdir, githubToken, ...shared });
@@ -168,6 +227,8 @@ export default function Stage1Manifest() {
       initializeFromUpload({ files, ...shared });
     }
   };
+
+  // ── Render ────────────────────────────────────────────────────────
 
   return (
     <form onSubmit={handleSubmit}>
@@ -177,8 +238,10 @@ export default function Stage1Manifest() {
         description="Describe the failure, then point FaultScope at the source it should read."
       />
 
+      {/* Two-column layout: explanatory aside (4 cols) + form (8 cols) */}
       <div className="grid grid-cols-1 gap-16 lg:grid-cols-12">
-        {/* Left column — the argument for what this tool does. */}
+
+        {/* ── Left column: product explanation ───────────────────── */}
         <aside className="space-y-8 lg:col-span-4">
           <p className="max-w-prose text-base leading-relaxed text-secondary">
             FaultScope reads a bug report and a codebase the way a reviewer would: it examines each
@@ -191,6 +254,7 @@ export default function Stage1Manifest() {
             keyword match but an argument for why one element causes the reported failure.
           </p>
 
+          {/* Engine info — pulled from the backend, not configurable here. */}
           <div className="space-y-3 border-t border-hairline pt-6">
             <span className="label-meta">Engine</span>
             <div>
@@ -203,11 +267,14 @@ export default function Stage1Manifest() {
           </div>
         </aside>
 
-        {/* Right column — the form. */}
+        {/* ── Right column: the form ─────────────────────────────── */}
         <div className="space-y-12 lg:col-span-8">
+
+          {/* ── Mode selector ───────────────────────────────────── */}
           <ModeToggle value={sourceType} onChange={(mode) => setField("sourceType", mode)} disabled={busy} />
 
           {sourceType === "github" ? (
+            /* ── GitHub mode fields ────────────────────────────── */
             <div className="space-y-8">
               <Field label="Repository URL" hint="required">
                 <input
@@ -254,6 +321,7 @@ export default function Stage1Manifest() {
                 </Field>
               </div>
 
+              {/* GitHub token — optional, raises unauthenticated rate limit from 60 to 5 000 req/hr. */}
               <Field label="GitHub token" hint="optional">
                 <input
                   type="password"
@@ -275,7 +343,10 @@ export default function Stage1Manifest() {
               </Field>
             </div>
           ) : (
+            /* ── Static upload mode ──────────────────────────────── */
             <div className="space-y-6">
+
+              {/* Drop zone — also acts as a click-to-browse trigger. */}
               <div
                 onDragOver={(event) => {
                   event.preventDefault();
@@ -307,6 +378,7 @@ export default function Stage1Manifest() {
 
               {localNotice && <p className="font-mono text-xs text-status-error">{localNotice}</p>}
 
+              {/* Uploaded file manifest — table with striped rows. */}
               {files.length > 0 && (
                 <div className="border-t border-hairline">
                   <div className="flex items-center justify-between py-3">
@@ -348,6 +420,7 @@ export default function Stage1Manifest() {
             </div>
           )}
 
+          {/* ── Bug report textarea ──────────────────────────────── */}
           <Field label="Bug report" hint="required">
             <textarea
               value={problemStatement}
@@ -363,6 +436,7 @@ export default function Stage1Manifest() {
             />
           </Field>
 
+          {/* ── Ground truth (optional, collapsed by default) ──── */}
           <div className="border-t border-hairline pt-6">
             <button
               type="button"
@@ -375,6 +449,7 @@ export default function Stage1Manifest() {
 
             {showGroundTruth && (
               <div className="mt-8 grid animate-rise grid-cols-1 gap-8 sm:grid-cols-2">
+                {/* Ground truth file — relative path to the expected buggy file. */}
                 <Field label="Ground truth file">
                   <input
                     type="text"
@@ -391,6 +466,7 @@ export default function Stage1Manifest() {
                   </p>
                 </Field>
 
+                {/* Ground truth elements — comma-separated "kind: name" pairs. */}
                 <Field label="Ground truth elements">
                   <input
                     type="text"
@@ -409,12 +485,15 @@ export default function Stage1Manifest() {
             )}
           </div>
 
+          {/* ── Loading indicator (while stage 01 is running) ────── */}
           <StageStatus active={loadingStage === 1} label={loadingLabel} />
 
+          {/* ── Submit row ─────────────────────────────────────── */}
           <div className="flex items-center gap-6 border-t border-hairline pt-8">
             <Button type="submit" disabled={!canSubmit}>
               Initialize Localization Pipeline →
             </Button>
+            {/* Inline validation hint when the button is disabled. */}
             {!canSubmit && !busy && (
               <span className="font-mono text-[11px] text-muted">
                 {problemStatement.trim()

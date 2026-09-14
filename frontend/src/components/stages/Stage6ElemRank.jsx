@@ -1,3 +1,14 @@
+/**
+ * Stage 06 — Suspicious Element Ranking
+ *
+ * The final ordering step. For each promoted file the model reads every
+ * element's causal reasoning paragraph and produces a ranked list ordered
+ * by how directly the described behaviour explains the reported failure.
+ *
+ * The top-ranked element in each file becomes the primary suspect. Users
+ * can click through to stage 07 to inspect the source code alongside the
+ * reasoning that nominated it.
+ */
 import React, { useMemo } from "react";
 import { useProject } from "../../context/ProjectContext";
 import Badge from "../common/Badge";
@@ -6,9 +17,11 @@ import SectionHeading from "../common/SectionHeading";
 import StageStatus from "../common/StageStatus";
 import { basename, fileKeyIndex, parseElementKey, pathForFileKey } from "../../lib/pipeline";
 
+// Human-readable labels for the first three positions.
 const RANK_LABELS = ["Most suspicious", "Secondary", "Tertiary"];
 
 export default function Stage6ElemRank() {
+  // ── Pipeline context ──────────────────────────────────────────────
   const {
     elementRanking,
     elementReasoning,
@@ -20,6 +33,7 @@ export default function Stage6ElemRank() {
     inspectElement,
   } = useProject();
 
+  // ── Derived: sorted ranking keys ──────────────────────────────────
   const rankingKeys = useMemo(
     () =>
       Object.keys(elementRanking || {}).sort(
@@ -28,10 +42,13 @@ export default function Stage6ElemRank() {
     [elementRanking],
   );
 
+  // ── Derived values ────────────────────────────────────────────────
   const busy = loadingStage !== null;
   const hasRanking = rankingKeys.length > 0;
 
-  // elementEval is keyed by ground-truth string: { "function: write": { found, file_key, position } }
+  // Build a map of ground-truth hits for quick lookup in the ranked list.
+  // elementEval is keyed by ground-truth string:
+  // { "function: write": { found, file_key, position } }
   const groundTruthHits = useMemo(() => {
     const map = new Map();
     Object.entries(elementEval || {}).forEach(([identifier, result]) => {
@@ -40,6 +57,7 @@ export default function Stage6ElemRank() {
     return map;
   }, [elementEval]);
 
+  // ── Render ────────────────────────────────────────────────────────
   return (
     <div>
       <SectionHeading
@@ -47,6 +65,7 @@ export default function Stage6ElemRank() {
         title="Suspicious Element Ranking"
         description="The final ordering within each promoted file, argued from the reasoning rather than the code."
         aside={
+          // Show ground-truth evaluation badges when available.
           elementEval && (
             <div className="flex flex-wrap items-center gap-3">
               {Object.entries(elementEval).map(([identifier, result]) => (
@@ -59,8 +78,10 @@ export default function Stage6ElemRank() {
         }
       />
 
+      {/* ── Loading indicator ────────────────────────────────────── */}
       <StageStatus active={busy} label={loadingLabel} />
 
+      {/* ── Empty state: prompt to rank ──────────────────────────── */}
       {!hasRanking && !busy && (
         <div className="space-y-8 py-6">
           <p className="max-w-prose text-base leading-relaxed text-secondary">
@@ -73,16 +94,19 @@ export default function Stage6ElemRank() {
         </div>
       )}
 
+      {/* ── Populated: per-file ranked element lists ─────────────── */}
       {hasRanking && (
         <div className="animate-rise space-y-16">
           {rankingKeys.map((key) => {
             const index = fileKeyIndex(key);
             const path = pathForFileKey(key, fileRanking);
+            // Build the key used to look up element reasoning for this file.
             const reasoningKey = `file${index}_elements_reasoning`;
             const ranked = elementRanking[key] || [];
 
             return (
               <section key={key}>
+                {/* File header with index badge and full path */}
                 <div className="mb-6 flex flex-wrap items-baseline justify-between gap-4 border-b border-hairline pb-3">
                   <div className="flex items-baseline gap-3">
                     <span className="font-mono text-[11px] text-muted">
@@ -114,6 +138,7 @@ export default function Stage6ElemRank() {
                           key={`${key}-${identifier}`}
                           className="flex flex-wrap items-baseline gap-x-8 gap-y-3 border-b border-hairline/70 py-5"
                         >
+                          {/* Large rank numeral — accent for the top element */}
                           <span
                             className={`numeral shrink-0 ${isTop ? "text-accent" : "text-muted"}`}
                           >
@@ -139,6 +164,7 @@ export default function Stage6ElemRank() {
                             </div>
                           </div>
 
+                          {/* Link to inspect source + reasoning in stage 07 */}
                           {path && hasReasoning && (
                             <button
                               type="button"
