@@ -51,16 +51,22 @@ def extract_code_elements_from_file(
     elements: list[tuple[str, str, int, int]] = []
 
     # Annotate every node with its parent so visit_Assign can check node.parent.
+    # This is a post-hoc attribute assignment — ast doesn't provide parent links
+    # by default, but the walk guarantees we visit parents before children.
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             child.parent = node  # type: ignore[attr-defined]
 
     class CodeVisitor(ast.NodeVisitor):
         def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            # Record every function/method as a standalone element.
+            # Class methods are NOT qualified with the class name — matching
+            # the original RGFL extraction convention.
             elements.append(("function", node.name, node.lineno, node.end_lineno))
             self.generic_visit(node)
 
         # AsyncFunctionDef intentionally NOT overridden — matches original.
+        # Async functions are not captured as elements in this reimplementation.
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
             elements.append(("class", node.name, node.lineno, node.end_lineno))
@@ -68,6 +74,7 @@ def extract_code_elements_from_file(
 
         def visit_Assign(self, node: ast.Assign) -> None:
             # Only capture module-level assignments (parent is the Module node).
+            # This filters out assignments inside functions/classes.
             parent = getattr(node, "parent", None)
             if isinstance(parent, ast.Module):
                 for target in node.targets:
@@ -97,6 +104,7 @@ def get_source_code(
     """
     lines = file_source.splitlines()
     kind, name, start_line, end_line = element
+    # Line numbers are 1-indexed; Python slicing is 0-indexed, so start_line - 1.
     return "\n".join(lines[start_line - 1 : end_line])
 
 

@@ -49,6 +49,8 @@ def parse_python_file(
     On any ast.parse failure: logs a warning and returns ([], [], file_content.splitlines()).
     This is a DEVIATION from the original (which returns an empty string on failure — a bug).
     """
+    # Try to parse the file into an AST. This can fail on syntax errors,
+    # encoding issues, or non-Python files masquerading as .py.
     try:
         parsed_data = ast.parse(file_content)
     except Exception as exc:
@@ -58,10 +60,12 @@ def parse_python_file(
 
     class_info: list[dict] = []
     function_names: list[dict] = []
-    class_methods: set[str] = set()
+    class_methods: set[str] = set()  # Track method names to avoid double-counting
 
+    # Walk the AST to find all ClassDef and FunctionDef nodes.
     for node in ast.walk(parsed_data):
         if isinstance(node, ast.ClassDef):
+            # For each class, extract its methods (FunctionDef nodes in its body).
             methods: list[dict] = []
             for n in node.body:
                 if isinstance(n, ast.FunctionDef):
@@ -71,6 +75,7 @@ def parse_python_file(
                         "end_line": n.end_lineno,
                         "text": file_content.splitlines()[n.lineno - 1 : n.end_lineno],
                     })
+                    # Record method names so we don't count them as top-level functions.
                     class_methods.add(n.name)
             class_info.append({
                 "name": node.name,
@@ -83,6 +88,7 @@ def parse_python_file(
             node, ast.AsyncFunctionDef
         ):
             # Exclude AsyncFunctionDef — matches original behaviour explicitly.
+            # Only count top-level functions (not class methods).
             if node.name not in class_methods:
                 function_names.append({
                     "name": node.name,
@@ -114,12 +120,17 @@ def create_structure(
     structure: dict = {}
     file_count = 0
 
+    # Walk the entire directory tree. os.walk yields (root, dirs, files) for
+    # each directory. We prune SKIP_DIRS in-place so os.walk won't descend.
     for root, dirs, files in os.walk(repo_root):
         # Prune skipped dirs in-place so os.walk does not descend into them.
         dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
 
+        # Build the nested dict structure by following the path hierarchy.
+        # relative_root is the path from repo_root to the current directory.
         relative_root = os.path.relpath(root, repo_root)
         curr = structure
+        # Navigate into nested dicts for each path segment.
         if relative_root != ".":
             for part in relative_root.split(os.sep):
                 curr = curr.setdefault(part, {})
@@ -186,9 +197,13 @@ def filter_none_python(structure: dict) -> None:
     """
     Recursively drop dict entries that are neither a parsed .py file nor a real folder.
     Mutates structure in-place.
+
+    This filter removes non-.py files (like images, configs) that don't have
+    the {classes, functions, text} shape of a parsed Python file.
     """
     for key in list(structure.keys()):
         value = structure[key]
+        # A parsed file has exactly 3 keys: classes, functions, text
         is_parsed_file = (
             isinstance(value, dict)
             and "functions" in value
@@ -197,10 +212,14 @@ def filter_none_python(structure: dict) -> None:
             and len(value.keys()) == 3
         )
         if not is_parsed_file:
+            # Recurse into subdirectories or non-parsed entries.
             filter_none_python(value)
+            # Remove empty directories that have no remaining children.
             if structure[key] == {}:
                 del structure[key]
         else:
+            # Remove parsed files that don't have .py extension (shouldn't exist,
+            # but defensive check).
             if not key.endswith(".py"):
                 del structure[key]
 

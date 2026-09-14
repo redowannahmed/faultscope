@@ -36,6 +36,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, model_validator
 
+# Import all pipeline modules — each handles one stage of the RGFL pipeline.
 import store as session_store
 from candidates import select_candidates
 from config import (
@@ -143,19 +144,20 @@ def _build_structure(repo_root: str, empty_detail: str | None = None) -> tuple[d
     Returns:
         ``(structure, files_flat, num_python_files, tree_preview)``.
     """
-    # §3.2 — Walk and parse
+    # §3.2 — Walk and parse: build nested dict from the filesystem.
     structure = create_structure(repo_root)
 
-    # §3.3 — Apply both filters (in order matching localize.py)
+    # §3.3 — Apply both filters (in order matching localize.py).
+    # First remove non-.py files, then remove test files.
     filter_none_python(structure)
     filter_out_test_files(structure)
 
-    # §3.4 — Flatten
+    # §3.4 — Flatten the nested dict into parallel lists for downstream stages.
     files_flat, _classes_flat, _functions_flat = (
         get_full_file_paths_and_classes_and_functions(structure)
     )
 
-    # Count only .py files (tuples in files_flat)
+    # Count only .py files (tuples in files_flat have (path, lines) format).
     num_python_files = sum(1 for f in files_flat if isinstance(f, tuple))
 
     if num_python_files == 0:
@@ -485,20 +487,24 @@ def create_project(req: CreateProjectRequest) -> CreateProjectResponse:
 
     Returns the project_id plus a tree preview and the Python file count.
     """
+    # Validate the backend is one of our supported providers.
     if req.backend not in ("anthropic", "openai", "gemini"):
         raise HTTPException(
             status_code=422,
             detail=f"backend must be one of 'anthropic', 'openai', 'gemini'. Got: {req.backend!r}",
         )
 
+    # The bug report must be non-empty — it's the core input to the pipeline.
     if not req.problem_statement.strip():
         raise HTTPException(
             status_code=422,
             detail="problem_statement must be non-empty.",
         )
 
+    # Handle GitHub URL vs local path — they're mutually exclusive (enforced by model_validator).
     github_meta: dict[str, str] | None = None
     if req.repo_url:
+        # Download and extract the GitHub repository to a temp directory.
         try:
             github_meta = get_repo_source(
                 repo_url=req.repo_url,
@@ -579,6 +585,7 @@ def run_candidates(project_id: str, req: CandidatesRequest) -> CandidatesRespons
 
     Prerequisite: POST /projects (structure must be built).
     """
+    # Verify the project exists and has completed Stage 0.
     session = _require_session(project_id)
     _require_stage(session, "structure", "POST /projects")
     _require_stage(session, "files_flat", "POST /projects")
@@ -586,6 +593,7 @@ def run_candidates(project_id: str, req: CandidatesRequest) -> CandidatesRespons
     logger.info("POST /projects/%s/candidates — top_n=%d", project_id, req.top_n_candidates)
 
     try:
+        # Call the LLM to nominate candidate files based on the bug report.
         candidates, raw_output = select_candidates(
             problem_statement=session["problem_statement"],
             structure=session["structure"],
@@ -601,6 +609,8 @@ def run_candidates(project_id: str, req: CandidatesRequest) -> CandidatesRespons
             detail=f"LLM call failed during candidate selection: {exc}",
         )
 
+    # The LLM might return paths that don't exist in the repo — we must reject
+    # an empty candidate set since the pipeline can't continue without files.
     if not candidates:
         raise HTTPException(
             status_code=422,
@@ -610,6 +620,7 @@ def run_candidates(project_id: str, req: CandidatesRequest) -> CandidatesRespons
             ),
         )
 
+    # Persist the candidates and raw LLM output for the next stage.
     session_store.update_session(
         project_id,
         candidates=candidates,
@@ -645,6 +656,8 @@ def run_file_reasoning(project_id: str) -> FileReasoningResponse:
     logger.info("POST /projects/%s/file-reasoning", project_id)
 
     try:
+        # Run parallel LLM calls — one per candidate file explaining its
+        # relationship to the bug report.
         file_reasoning = generate_file_reasoning(
             candidates=session["candidates"],
             problem_statement=session["problem_statement"],
@@ -660,6 +673,7 @@ def run_file_reasoning(project_id: str) -> FileReasoningResponse:
             detail=f"File reasoning stage failed: {exc}",
         )
 
+    # Store the reasoning dict — Stage 3 will use it to rank files.
     session_store.update_session(project_id, file_reasoning=file_reasoning)
 
     logger.info(
@@ -687,6 +701,7 @@ def run_file_ranking(project_id: str) -> FileRankingResponse:
     logger.info("POST /projects/%s/file-ranking", project_id)
 
     try:
+        # Single LLM call: present all file reasoning and ask for a ranking.
         ranked_files = rank_files(
             file_reasoning_dict=session["file_reasoning"],
             problem_statement=session["problem_statement"],
@@ -701,8 +716,10 @@ def run_file_ranking(project_id: str) -> FileRankingResponse:
             detail=f"File ranking LLM call failed: {exc}",
         )
 
+    # Optionally evaluate against ground truth if provided.
     eval_result = hit_at_k(ranked_files, session.get("ground_truth_file"))
 
+    # Store the ranked list and evaluation results.
     session_store.update_session(
         project_id,
         file_ranking=ranked_files,
@@ -713,6 +730,7 @@ def run_file_ranking(project_id: str) -> FileRankingResponse:
         "Stage 3 done for %s — ranked order: %s", project_id, ranked_files
     )
 
+    # Extract ground truth rank and Hit@k results for the API response.
     ground_truth_rank: int | None = None
     hit_at_k_result: dict[str, bool] | None = None
     if eval_result:
@@ -754,6 +772,8 @@ def run_element_reasoning(
     )
 
     try:
+        # For each of the top-K ranked files, extract elements via AST and
+        # run parallel LLM calls to explain each element's relevance to the bug.
         element_reasoning = generate_all_element_reasoning(
             ranked_files=session["file_ranking"],
             repo_root=session["repo_root"],
@@ -770,6 +790,7 @@ def run_element_reasoning(
             detail=f"Element reasoning stage failed: {exc}",
         )
 
+    # Store element reasoning — Stage 6 will use it to rank elements.
     session_store.update_session(project_id, element_reasoning=element_reasoning)
 
     logger.info(
@@ -804,6 +825,8 @@ def run_element_ranking(project_id: str) -> ElementRankingResponse:
     logger.info("POST /projects/%s/element-ranking", project_id)
 
     try:
+        # For each file's element reasoning, make one LLM call to rank
+        # which elements are most likely buggy.
         element_ranking = rank_all_files_elements(
             element_reasoning=session["element_reasoning"],
             problem_statement=session["problem_statement"],
@@ -817,10 +840,12 @@ def run_element_ranking(project_id: str) -> ElementRankingResponse:
             detail=f"Element ranking stage failed: {exc}",
         )
 
+    # Optionally evaluate against ground truth elements if provided.
     eval_result = element_hit_at_k(
         element_ranking, session.get("ground_truth_elements")
     )
 
+    # Store the ranked elements and evaluation results.
     session_store.update_session(
         project_id,
         element_ranking=element_ranking,

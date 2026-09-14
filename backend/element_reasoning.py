@@ -53,6 +53,7 @@ def _reason_single_element(
     """
     kind, name, _, _ = element
     key = element_key(kind, name)
+    # Extract the element's source code from the full file text.
     element_code = get_source_code(element, file_source)
 
     prompt = _ELEMENT_REASONING_PROMPT_TEMPLATE.format(
@@ -63,6 +64,8 @@ def _reason_single_element(
     try:
         reasoning = call_llm(prompt, model=model, backend=backend, temperature=0.0)
     except Exception as exc:
+        # Store the error as the reasoning value — the ranking stage needs
+        # an entry for every element, so we can't just skip failures.
         error_msg = f"Error during reasoning: {exc}"
         logger.warning("LLM call failed for element %s: %s", key, exc)
         return key, error_msg
@@ -99,6 +102,7 @@ def generate_element_reasoning(
     """
     abs_path = os.path.join(repo_root, file_path)
 
+    # Read the file content from disk.
     try:
         with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
             file_content = fh.read()
@@ -106,6 +110,7 @@ def generate_element_reasoning(
         logger.warning("Could not read file for element extraction %s: %s", abs_path, exc)
         return None
 
+    # Parse the file to extract all code elements (functions, classes, globals).
     try:
         elements, file_source = extract_code_elements_from_file(file_content)
     except Exception as exc:
@@ -128,6 +133,7 @@ def generate_element_reasoning(
 
     results: dict[str, str] = {}
 
+    # Submit all elements to the thread pool for parallel LLM calls.
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_key = {
             executor.submit(
@@ -165,10 +171,12 @@ def generate_all_element_reasoning(
     Files where element extraction fails are skipped (None returned by
     generate_element_reasoning) — they produce no key in the output dict.
     """
+    # Only process the top-k files from the ranking.
     top_files = ranked_files[:top_k]
     output: dict[str, dict[str, str]] = {}
 
     for idx, file_path in enumerate(top_files, start=1):
+        # Key naming convention: "file1_elements_reasoning", "file2_elements_reasoning", ...
         key = f"file{idx}_elements_reasoning"
         logger.info(
             "Stages 4+5: processing file %d/%d: %s", idx, len(top_files), file_path
@@ -184,6 +192,7 @@ def generate_all_element_reasoning(
         if reasoning is not None:
             output[key] = reasoning
         else:
+            # Extraction failed — skip this file entirely.
             logger.warning("Skipping element reasoning for %s (extraction failed)", file_path)
 
     return output

@@ -55,14 +55,19 @@ def normalize_to_list(entry: str) -> list[str]:
     backticks/quotes/spaces/commas/newlines, and drop known bad tokens.
     """
     def clean_item(item: str) -> str:
+        # Remove leading numbering like "1. " from ranked lists.
         item = re.sub(r'^\d+\.\s*', '', item)
+        # Strip surrounding backticks, quotes, whitespace, and commas.
         return item.strip("`'\" \t\n,")
 
+    # Tokens that the LLM sometimes emits but aren't real element keys.
     bad_tokens = {'[', ']', 'json', '```', '```json', ''}
 
     entry = entry.strip()
+    # Strip markdown code fences (```json ... ```)
     entry = re.sub(r'^```.*$', '', entry, flags=re.MULTILINE)
 
+    # Try ast.literal_eval first — safe alternative to eval() for list literals.
     try:
         parsed = ast.literal_eval(entry)
         if isinstance(parsed, list):
@@ -74,6 +79,7 @@ def normalize_to_list(entry: str) -> list[str]:
     except Exception:
         pass
 
+    # Fallback: split on newlines/commas and clean each item.
     lines = re.split(r'[\n,]+', entry)
     return [
         clean_item(line)
@@ -96,12 +102,15 @@ def postprocess_keys(
     corrected: list[str] = []
     for s in similar_elements:
         if ':' in s:
+            # Already has the full key format — keep as-is.
             corrected.append(s)
         else:
+            # Bare name — try to find the matching full key in the reasoning dict.
             for full_key in elem_reasoning_dict.keys():
                 if full_key.endswith(f": {s}"):
                     corrected.append(full_key)
                     break
+    # If no corrections succeeded at all, return the original list unchanged.
     return corrected if corrected else similar_elements
 
 
@@ -138,7 +147,7 @@ def element_hit_at_k(
     if not ground_truth_elements:
         return None
 
-    # Flatten all ranked lists for lookup
+    # Flatten all ranked lists for lookup.
     evaluation: dict[str, dict] = {}
 
     for gt_elem in ground_truth_elements:
@@ -146,12 +155,13 @@ def element_hit_at_k(
         found_file_key: str | None = None
         position: int | None = None
 
+        # Search across all files' ranked element lists.
         for file_key, ranked_list in all_ranked_elements.items():
             if gt_elem in ranked_list:
                 found = True
                 found_file_key = file_key
-                position = ranked_list.index(gt_elem) + 1
-                break
+                position = ranked_list.index(gt_elem) + 1  # 1-indexed
+                break  # Stop at first match across files.
 
         evaluation[gt_elem] = {
             "found": found,
@@ -188,6 +198,7 @@ def rank_elements(
     Raises:
         Any exception from call_llm — caller handles.
     """
+    # Serialize the element reasoning dict as JSON for the prompt.
     file_elements_reasoning_json = json.dumps(elem_reasoning_dict, indent=2)
 
     prompt = _ELEMENT_RANKING_PROMPT_TEMPLATE.format(
@@ -197,6 +208,7 @@ def rank_elements(
 
     raw_output = call_llm(prompt, model=model, backend=backend, temperature=0.0)
 
+    # Parse and postprocess the LLM's ranking response.
     similar_elements = normalize_to_list(raw_output)
     similar_elements = postprocess_keys(similar_elements, elem_reasoning_dict)
 
@@ -221,7 +233,7 @@ def rank_all_files_elements(
     output: dict[str, list[str]] = {}
 
     for file_reasoning_key, elem_dict in element_reasoning.items():
-        # "file1_elements_reasoning" -> "similar_elements_file1"
+        # Convert key naming: "file1_elements_reasoning" -> "similar_elements_file1"
         # Extract the index digit(s) from the key name.
         idx_str = file_reasoning_key.replace("file", "").replace("_elements_reasoning", "")
         out_key = f"similar_elements_file{idx_str}"
@@ -236,6 +248,7 @@ def rank_all_files_elements(
             ranked = rank_elements(elem_dict, problem_statement, model, backend)
             output[out_key] = ranked
         except Exception as exc:
+            # Store empty list on failure — the pipeline continues with partial results.
             logger.warning(
                 "Element ranking LLM call failed for %s: %s", file_reasoning_key, exc
             )

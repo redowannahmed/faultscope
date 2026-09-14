@@ -30,21 +30,27 @@ _SESSIONS_DIR: str = "sessions"  # relative to the cwd when uvicorn is started
 
 
 # ---------------------------------------------------------------------------
-# In-memory store
+# In-memory store — a simple dict mapping project_id -> session dict.
+# No database needed for a demo/research tool.
 # ---------------------------------------------------------------------------
 _store: dict[str, dict[str, Any]] = {}
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — disk persistence for surviving server restarts
 # ---------------------------------------------------------------------------
 
 def _sessions_path(project_id: str) -> str:
+    """Return the file path for a session's JSON file on disk."""
     return os.path.join(_SESSIONS_DIR, f"{project_id}.json")
 
 
 def _persist(project_id: str) -> None:
-    """Write a session to disk (best-effort; never raises)."""
+    """Write a session to disk (best-effort; never raises).
+
+    This ensures that if the server restarts, we can recover completed
+    pipeline stages from disk rather than forcing the user to re-run them.
+    """
     if not PERSIST_SESSIONS:
         return
     try:
@@ -61,7 +67,11 @@ def _persist(project_id: str) -> None:
 
 
 def _load_from_disk(project_id: str) -> dict[str, Any] | None:
-    """Try to load a session from disk (used at startup or on cache miss)."""
+    """Try to load a session from disk (used at startup or on cache miss).
+
+    This allows the server to recover sessions after a restart by reading
+    the JSON files we wrote during _persist().
+    """
     path = _sessions_path(project_id)
     if not os.path.exists(path):
         return None

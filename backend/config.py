@@ -7,10 +7,16 @@ accepted where the API spec allows them.
 # ---------------------------------------------------------------------------
 # Repository-walking limits (§2)
 # ---------------------------------------------------------------------------
-MAX_FILES: int = 800          # Cap total .py files walked; truncate + warn if exceeded
-MAX_FILE_BYTES: int = 300_000 # Skip content of any .py file larger than this (~300 KB)
+# Cap total .py files walked; truncate + warn if exceeded.
+# This prevents pathological repos from consuming all memory/LLM tokens.
+MAX_FILES: int = 800
 
-# Directories to prune before descending during os.walk (§2)
+# Skip content of any .py file larger than this (~300 KB).
+# Large files are unlikely to be the source of a bug and waste LLM context.
+MAX_FILE_BYTES: int = 300_000
+
+# Directories to prune before descending during os.walk (§2).
+# These are almost never relevant to a bug and only add noise.
 SKIP_DIRS: frozenset[str] = frozenset({
     ".git",
     "node_modules",
@@ -25,18 +31,25 @@ SKIP_DIRS: frozenset[str] = frozenset({
 # LLM / reasoning limits (§5)
 # ---------------------------------------------------------------------------
 # Max characters of file content to insert into a file-reasoning prompt.
-# If exceeded, content is truncated and a marker appended.
+# If exceeded, content is truncated and a marker appended to avoid
+# blowing out the LLM's context window.
 MAX_REASONING_FILE_CHARS: int = 60_000
 
 # Thread-pool concurrency for parallel LLM calls (§5, §8)
-MAX_REASONING_WORKERS: int = 5   # file-level reasoning (§5)
-MAX_ELEMENT_WORKERS: int = 1     # element-level reasoning (§8)
+# These control how many LLM calls run simultaneously.
+MAX_REASONING_WORKERS: int = 5   # file-level reasoning (§5) — can be higher since files are independent
+MAX_ELEMENT_WORKERS: int = 1     # element-level reasoning (§8) — conservative to avoid rate limits
 
 # ---------------------------------------------------------------------------
 # Pipeline stage defaults
 # ---------------------------------------------------------------------------
-DEFAULT_TOP_N_CANDIDATES: int = 5   # Stage 1: how many candidate files to ask for
-DEFAULT_TOP_K_FILES: int = 3        # Stage 4-6: how many top files to extract elements from
+# Stage 1: how many candidate files to ask the LLM to nominate.
+# More candidates = more LLM work downstream, but better recall.
+DEFAULT_TOP_N_CANDIDATES: int = 5
+
+# Stage 4-6: how many top files to extract elements from.
+# The paper uses 3 (§4.3/RQ1.1) as the default.
+DEFAULT_TOP_K_FILES: int = 3
 
 # ---------------------------------------------------------------------------
 # LLM defaults — Gemini free-tier
@@ -72,8 +85,12 @@ SESSIONS_DIR: str = "sessions"
 # ---------------------------------------------------------------------------
 # Maximum compressed archive size accepted from GitHub.  This keeps a public
 # URL request from unexpectedly consuming excessive memory in this demo app.
-MAX_REPO_DOWNLOAD_BYTES: int = 150_000_000
+MAX_REPO_DOWNLOAD_BYTES: int = 150_000_000  # 150 MB
+
+# Timeout for downloading GitHub tarballs — generous to handle slow mirrors.
 DOWNLOAD_TIMEOUT_SECONDS: int = 60
+
+# Base URL for GitHub API calls (repos, commits, tarballs).
 GITHUB_API_BASE: str = "https://api.github.com"
 
 # ---------------------------------------------------------------------------
@@ -82,7 +99,7 @@ GITHUB_API_BASE: str = "https://api.github.com"
 # Browser-uploaded candidate files are staged into a temp directory and used
 # as the candidate set directly, bypassing LLM candidate selection (§4).
 MAX_UPLOAD_FILES: int = 50
-MAX_UPLOAD_TOTAL_BYTES: int = 20_000_000
+MAX_UPLOAD_TOTAL_BYTES: int = 20_000_000  # 20 MB
 
 # ---------------------------------------------------------------------------
 # LLM transient-failure retry
@@ -93,5 +110,5 @@ MAX_UPLOAD_TOTAL_BYTES: int = 20_000_000
 # strings and quietly degrade the ranking they feed. Retries are bounded and
 # apply only to rate-limit / transient-server errors, never to bad requests.
 LLM_MAX_RETRIES: int = 4
-LLM_RETRY_BASE_SECONDS: float = 8.0
-LLM_RETRY_MAX_SECONDS: float = 60.0
+LLM_RETRY_BASE_SECONDS: float = 8.0  # Initial backoff delay
+LLM_RETRY_MAX_SECONDS: float = 60.0  # Cap on backoff delay
